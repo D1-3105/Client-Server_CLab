@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <malloc.h>
+#include <math.h>
 
 typedef struct {
 	size_t content_len;
@@ -12,62 +13,58 @@ typedef struct {
 } response;
 
 typedef struct {
-	char* data;
+	unsigned content_len;
+	void* data;
 } request;
 
-struct coefficients {
-	float a, b, y;
-};
+int* endpoint_logic(request* req, int* answer_len, int* answer) {
+	int cur_len = 0;
+    	int* data = (int*) req->data;
+    	int num_ints = req->content_len / sizeof(int);
+    	for (int i = 0; i < num_ints - 1; i++) {
+        	int cur_num = data[i];
+        	unsigned is_prime = 1;
+        	for (int delim = 2; delim < cur_num; delim++) {
+			if (cur_num % delim == 0) {
+                		is_prime = 0;
+                		break;
+          		}
+        	}
+        	if (is_prime) {
+            		cur_len++;
+            		answer = (int*) realloc(answer, sizeof(int) * cur_len);
+            		answer[cur_len - 1] = cur_num;
+        	}
+    	}
+    	*answer_len = cur_len;
+}
 
-response do_work(request* buf) {
-	if(buf->data != NULL) {
-		// buf->data = a, b, y
-		if (((float*) buf->data)[0] == 0){
-			response resp = {18+sizeof(unsigned)*2, 400, "Division by zero!"};
-			return resp;
-		}
-		struct coefficients coefs ={ ((float*) buf->data)[0], ((float*) buf->data)[1], ((float*) buf->data)[2] };
-		float *x = (float*) malloc(sizeof(float)*1);
-		*x = (coefs.y - coefs.b) / coefs.a;
-		response resp = {sizeof(float)+sizeof(unsigned)*2, 200, (char*)x};
+response do_work(request* req) {
+	if(req->data != NULL) {
+		int* result_len = malloc(sizeof(int));
+		int* result = malloc(100);
+		endpoint_logic(req, result_len, result);
+		response resp = {sizeof(int)*(*result_len)+sizeof(unsigned)*2, 200, (void*)result};
 		return resp;
 	}
 	response resp = {sizeof(unsigned)*2, 500, NULL};
 	return resp;
 }
 
-void* receive_data(int sock) {
+request receive_data(int sock) {
 	float* buf = malloc(sizeof(float)*3);
 	int bytes_read;
-	bytes_read = recv(sock, buf, 3*sizeof(float), 0);
-	if(bytes_read == 0) {
-		return;
-	}
-	printf("\ns:A: %f \n", buf[0]);
-	printf("\ns:B: %f \n", buf[1]);
-	printf("\ns:Y: %f \n", buf[2]);
-	return buf;
+	unsigned content_length;
+	recv(sock, &content_length, sizeof(unsigned), 0);
+	recv(sock, buf, content_length-sizeof(unsigned), 0);
+	request received = {content_length, buf};
+	return received;
 }
 
-int respond(int sock, response *resp, int len, int flags) {
-    	int total = 0;
-	int n;
-	printf("%u , %u \n", resp->status_code, resp->content_len);
-	printf("s:X: %f", *resp->data);
+void respond(int sock, response *resp, int len, int flags) {
 	send(sock, &resp->content_len, sizeof(unsigned), 0);
 	send(sock, &resp->status_code, sizeof(unsigned), 0);
-	//if (resp->status_code == 200)
-	send(sock, resp->data, resp->content_len - sizeof(unsigned)*2, 0);
-	//for debug 
-
-		//float test_n = 777;
-		//send(sock, &test_n, resp->content_len - sizeof(unsigned)*2, 0);
-
-
-
-//else
-		//send(sock, resp->data, resp->content_len - sizeof(unsigned)*2, 0);
-	return (n==-1 ? -1 : total);
+	send(sock, (void*)resp->data, resp->content_len - sizeof(unsigned)*2, 0);
 }
 
 void accept_ready(int listener){
@@ -80,7 +77,7 @@ void accept_ready(int listener){
                         exit(3);
                 }
 		printf("\ns:ACCEPTED CONNECTION\n");
-		request received_request = { receive_data(sock) };
+		request received_request = receive_data(sock);
 		printf("\ns:ACCEPTED DATA\n");
 		response resp = do_work(&received_request);
 		printf("\ns:WORK DONE\n");
